@@ -15,6 +15,7 @@ __all__ = [
     "IniData",
     "IniReader",
     "OrbitalElements",
+    "ParticlesData",
     "PlanetData",
     "PlanetReader",
     "StrDict",
@@ -80,6 +81,40 @@ class BinData(Generic[F]):
     @classmethod
     def default_init(cls, *, dtype: np.dtype[F]) -> "BinData[F]":
         return BinData(
+            **(
+                {  # type: ignore
+                    field.name: field.default
+                    for field in cls.__dataclass_fields__.values()
+                }
+                | {"dtype": dtype, "data": {}}
+            )  # ty:ignore[invalid-argument-type]
+        )
+
+    def finalize(self) -> Self:
+        missing_fields = [
+            f.name
+            for f in self.__dataclass_fields__.values()
+            if getattr(self, f.name) is f.default
+        ]
+        if any(missing_fields):
+            raise TypeError(
+                f"The following fields were not initialized: {missing_fields}"
+            )
+        return self
+
+
+@final
+@dataclass(frozen=True, eq=False, slots=True)
+class ParticlesData(Generic[F]):
+    data: StrDict
+    geometry: "Geometry"
+
+    # this attribute only exists for purpose of debugging
+    dtype: np.dtype[F]
+
+    @classmethod
+    def default_init(cls, *, dtype: np.dtype[F]) -> "ParticlesData[F]":
+        return ParticlesData(
             **(
                 {  # type: ignore
                     field.name: field.default
@@ -206,6 +241,14 @@ class PlanetReader(Protocol, Generic[F]):
 
     @staticmethod
     def read(file: os.PathLike[str], /) -> PlanetData[F]: ...
+
+
+class ParticlesReader(Protocol, Generic[F]):
+    @staticmethod
+    def get_particles_files(directory: Path, /) -> list[Path]: ...
+
+    @staticmethod
+    def read(file: os.PathLike[str], /, **meta: Any) -> ParticlesData[F]: ...
 
 
 class IniReader(Protocol):

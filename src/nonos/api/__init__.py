@@ -2,6 +2,8 @@ __all__ = [
     "GasDataSet",
     "GasField",
     "NonosLick",
+    "ParticlesDataSet",
+    "ParticlesVariable",
     "Plotable",
     "bracketing_values",
     "closest_index",
@@ -12,7 +14,13 @@ __all__ = [
     "find_nearest",  # deprecated
     "from_data",
 ]
-from .analysis import GasDataSet, GasField, Plotable
+from .analysis import (
+    GasDataSet,
+    GasField,
+    ParticlesDataSet,
+    ParticlesVariable,
+    Plotable,
+)
 from .satellite import NonosLick, compute, file_analysis, from_data
 from .tools import (
     bracketing_values,

@@ -34,6 +34,7 @@ from numpy import float32 as f32, float64 as f64
 from nonos._geometry import AutoIndex, Coordinates
 from nonos._integrity_checks import (
     check_field_operands,
+    check_variable_operands,
     collect_dtype_exceptions,
     collect_shape_exceptions,
     compile_exceptions,
@@ -233,6 +234,7 @@ def _find_planet_azimuth(
 
 
 FieldOp: TypeAlias = Callable[["Field[F]", Any], "Field[F]"]
+VariableOp: TypeAlias = Callable[["Variable[F]", Any], "Variable[F]"]
 
 
 def _arithmetic_field_operator(
@@ -264,10 +266,45 @@ def _arithmetic_field_operator(
     return decorator
 
 
+def _arithmetic_variable_operator(
+    baseop: Callable[[FArray1D[F], Any], FArray1D[F]],
+    result_name: str,
+    *,
+    reverse_operands: bool = False,
+) -> Callable[["VariableOp[F]"], "VariableOp[F]"]:
+    def decorator(meth: "VariableOp[F]") -> "VariableOp[F]":
+        @wraps(meth)
+        def impl(f1: "Variable[F]", f2: Any) -> "Variable[F]":
+            operands: tuple[FArray3D[F], Any]
+            match f2:
+                case Variable():
+                    if excs := check_variable_operands(f1, f2):
+                        raise excs
+                    f2 = cast("Variable[F]", f2)
+                    operands = (f1.data, f2.data)
+                case Real():
+                    operands = (f1.data, f2)
+                case _:
+                    return NotImplemented  # type: ignore[no-any-return]
+            if reverse_operands:
+                operands = tuple(reversed(operands))
+            return f1.replace(name=result_name, data=baseop(*operands).astype(f1.dtype))
+
+        return impl
+
+    return decorator
+
+
 class FieldAttrs(TypedDict, Generic[F], total=False):
     name: str
     data: FArray3D[F]
     coordinates: Coordinates[F]
+
+
+class VariableAttrs(TypedDict, Generic[F], total=False):
+    name: str
+    data: FArray1D[F]
+    ngeom: str
 
 
 T = TypeVar("T", f32, f64)
@@ -1712,3 +1749,302 @@ class GasDataSet(Generic[D, F]):
         The number of fields in the GasDataSet
         """
         return len(self.dict)
+
+
+class ParticlesDataSet(Generic[D, F]):
+    """Idefix dataset class that contains everything in the .vtk file
+
+    Args:
+        input_dataset (int or str): output number or file name
+        directory (str): directory of the .vtk
+        geometry (str): for retrocompatibility if old vtk format
+        inifile (str): name of the simulation's parameter file if no default files (combined with code)
+        code (str): name of the code ("idefix", "pluto", "fargo3d", "fargo-adsg")
+    Returns:
+        dataset
+    """
+
+    def __init__(
+        self,
+        input_dataset: os.PathLike[str] | int,
+        /,
+        *,
+        inifile: os.PathLike[str] | None = None,
+        code: str | None = None,
+        geometry: str | None = None,
+        directory: os.PathLike[str] | None = None,
+        operation: str | None = None,
+    ) -> None:
+        if isinstance(input_dataset, str | Path):
+            input_dataset = Path(input_dataset)
+            directory_from_input = input_dataset.parent
+            if directory is None:
+                directory = directory_from_input
+            elif directory_from_input.resolve() != Path(directory).resolve():
+                raise ValueError(
+                    f"directory value {directory!r} does not match "
+                    f"directory name from input_dataset ({directory_from_input!r})"
+                )
+            del directory_from_input
+
+        if directory is None:
+            directory = Path.cwd()
+        else:
+            directory = Path(directory)
+
+        loader = Loader.resolve(
+            code=code,
+            parameter_file=inifile,
+            directory=directory,
+        )
+
+        if operation is not None:
+            ignored_kwargs = []
+            if geometry is not None:
+                ignored_kwargs.append("geometry")
+            if ignored_kwargs:
+                ignored = ", ".join(repr(_) for _ in ignored_kwargs)
+                msg = (
+                    "The following keyword arguments are ignored "
+                    f"when combined with 'operation': {ignored}"
+                )
+                warnings.warn(msg, UserWarning, stacklevel=2)
+            self._loader = dataclasses.replace(
+                loader,
+                components=dataclasses.replace(
+                    loader.components, binary_reader=NPYReader
+                ),
+            )
+        else:
+            self._loader = loader
+
+        self.snapshot_uid, datafile = (
+            self._loader.components.particles_reader.parse_snapshot_uid_and_filename(
+                input_dataset,
+                directory=directory,
+                prefix=operation or "",
+            )
+        )
+
+        bd = self._loader.load_particles_data(datafile, geometry=geometry)
+
+        self.dict: dict[str, ParticlesVariable[F]] = {}
+        for key, array in bd.data.items():
+            self.dict[key] = ParticlesVariable(
+                key,
+                data=array,
+                ngeom=geometry,
+                on=self.snapshot_uid,
+                inifile=self._loader.parameter_file,
+                operation="",
+            )
+
+        # backward compatibility for self.params
+        self._parameters_input = {
+            "inifile": inifile,
+            "code": code.removesuffix("_vtk") if code is not None else None,
+            "directory": directory,
+        }
+
+    @property
+    def geometry(self) -> Geometry:
+        return self._coordinates.geometry
+
+    def native_geometry(self) -> Geometry:
+        return self.geometry
+
+    def __getitem__(self, key: str) -> "ParticlesVariable[F]":
+        if key in self.dict:
+            return self.dict[key]
+        else:
+            raise KeyError
+
+    def keys(self) -> KeysView[str]:
+        """
+        Returns
+        =======
+        keys of the dict
+        """
+        return self.dict.keys()
+
+    def values(self) -> ValuesView["ParticlesVariable[F]"]:
+        """
+        Returns
+        =======
+        values of the dict
+        """
+        return self.dict.values()
+
+    def items(self) -> ItemsView[str, "ParticlesVariable[F]"]:
+        """
+        Returns
+        =======
+        items of the dict
+        """
+        return self.dict.items()
+
+    @property
+    def nvariables(self) -> int:
+        """
+        Returns
+        =======
+        The number of variables in the ParticlesDataSet
+        """
+        return len(self.dict)
+
+
+@final
+class ParticlesVariable(Generic[F]):
+    def __init__(
+        self,
+        name: str,
+        data: FArray1D[F],
+        ngeom: str,
+        on: int,
+        operation: str,
+        *,
+        inifile: os.PathLike[str] | None = None,
+        code: str | None = None,
+        directory: os.PathLike[str] | None = None,
+        rotate_by: float | None = None,
+        rotate_with: str | None = None,
+    ) -> None:
+
+        self._variable: Variable[F] = Variable(
+            name=name,
+            data=data,
+            ngeom=ngeom,
+        )
+
+        self._snapshot_uid = on
+        self._operation = operation
+        self._loader = Loader.resolve(
+            code=code,
+            parameter_file=inifile,
+            directory=Path.cwd() if directory is None else Path(directory),
+        )
+        self._rotate_by = _resolve_rotate_by(
+            rotate_by=rotate_by,
+            rotate_with=rotate_with,
+            planet_azimuth_finder=partial(
+                _find_planet_azimuth,
+                loader=self._loader,
+                snapshot_uid=on,
+            ),
+        )
+
+    @property
+    def snapshot_uid(self) -> int:
+        return self._snapshot_uid
+
+    @property
+    def snapshot_number(self) -> int:  # pragma: no cover
+        # supported (non-deprecated) alias
+        return self.snapshot_uid
+
+    @property
+    def directory(self) -> Path:
+        return self._loader.parameter_file.parent
+
+    @property
+    def operation(self) -> str:
+        return self._operation
+
+    # thinly wrap the underlying Variable object by re-exposing its attributes
+    # as read-only properties
+    @property
+    def name(self) -> str:
+        return self._variable.name
+
+    @property
+    def data(self) -> FArray3D[F]:
+        return self._variable.data
+
+    @property
+    def dtype(self) -> np.dtype[F]:
+        return self._variable.dtype
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self._variable.shape
+
+
+@final
+@dataclass(slots=True, frozen=True, kw_only=True)
+class Variable(Generic[F]):
+    name: str
+    data: FArray1D[F]
+    ngeom: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "data", self.data.view())
+        self.data.flags.writeable = False
+
+    @property
+    def geometry(self) -> Geometry:  # pragma: no cover
+        return self.ngeom
+
+    def replace(self, **subs: Unpack[VariableAttrs[F]]) -> "Variable[F]":
+        """Convenience wrapper around copy.replace"""
+        if sys.version_info >= (3, 13):
+            from copy import replace
+        else:
+            from dataclasses import replace
+        return replace(self, **subs)
+
+    @property
+    def dtype(self) -> np.dtype[F]:  # pragma: no cover
+        return self.data.dtype
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.data.shape
+
+    def astype(self, dtype: np.dtype[T]) -> "Variable[T]":
+        """
+        For convenience, mimic np.ndarray.astype
+
+        The underlying data is always copied.
+
+        .. versionadded: 0.20.0
+        """
+        return Variable(
+            name=self.name,
+            data=self.data.astype(dtype),
+            ngeom=self.ngeom.astype(dtype),
+        )
+
+    def __eq__(self, other: object) -> bool:
+        # checks are ordered from cheapest to most expensive
+        # so False is returned as early as possible when other
+        # is not comparable
+        return other is self or (
+            type(other) is Variable
+            and self.name == other.name
+            and self.ngeom == other.ngeom
+            and bool(other.data is self.data or np.all(other.data == self.data))
+        )
+
+    # low level arithmetic
+
+    # despite my best effort, type checkers (mypy and ty) do not
+    # seem able to infer that these decorated methods are in fact
+    # type-safe: their real bodies live in the decorator's implementation
+    @_arithmetic_variable_operator(op.add, "<sum-result>")
+    def __add__(self, other: Any) -> "Variable[F]": ...  # type: ignore
+    @_arithmetic_variable_operator(op.add, "<sum-result>", reverse_operands=True)
+    def __radd__(self, other: Any) -> "Variable[F]": ...  # type: ignore
+    @_arithmetic_variable_operator(op.sub, "<sub-result>")
+    def __sub__(self, other: Any) -> "Variable[F]": ...  # type: ignore
+    @_arithmetic_variable_operator(op.sub, "<sub-result>", reverse_operands=True)
+    def __rsub__(self, other: Any) -> "Variable[F]": ...  # type: ignore
+    @_arithmetic_variable_operator(op.mul, "<mul-result>")
+    def __mul__(self, other: Any) -> "Variable[F]": ...  # type: ignore
+    @_arithmetic_variable_operator(op.mul, "<mul-result>", reverse_operands=True)
+    def __rmul__(self, other: Any) -> "Variable[F]": ...  # type: ignore
+    @_arithmetic_variable_operator(op.truediv, "<truediv-result>")
+    def __truediv__(self, other: Any) -> "Variable[F]": ...  # type: ignore
+    @_arithmetic_variable_operator(
+        op.truediv, "<truediv-result>", reverse_operands=True
+    )
+    def __rtruediv__(self, other: Any) -> "Variable[F]": ...  # type: ignore

@@ -1,5 +1,6 @@
 __all__ = [
     "check_field_operands",
+    "check_variable_operands",
     "collect_dtype_exceptions",
     "collect_shape_exceptions",
     "compile_exceptions",
@@ -9,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from nonos.api.analysis import Field
+    from nonos.api.analysis import Field, Variable
 
 
 def collect_shape_exceptions(
@@ -43,6 +44,25 @@ def collect_dtype_exceptions(*dtypes: np.dtype[Any]) -> list[Exception]:
 
 
 def check_field_operands(f1: "Field[Any]", f2: "Field[Any]") -> Exception | None:
+    exceptions: list[Exception] = []
+    if f1.shape != f2.shape:
+        exceptions.append(TypeError("operands have incompatible shapes"))
+    elif f1.coordinates != f2.coordinates:
+        exceptions.append(TypeError("operands have incompatible coordinates"))
+    if f1.dtype.kind != f2.dtype.kind or f1.dtype.itemsize != f2.dtype.itemsize:
+        exceptions.append(TypeError("operands have incompatible dtypes"))
+
+    if len(exceptions) == 1:
+        return exceptions[0]
+    elif exceptions:
+        return ExceptionGroup("multiple issues with operands", exceptions)
+
+    return None
+
+
+def check_variable_operands(
+    f1: "Variable[Any]", f2: "Variable[Any]"
+) -> Exception | None:
     exceptions: list[Exception] = []
     if f1.shape != f2.shape:
         exceptions.append(TypeError("operands have incompatible shapes"))

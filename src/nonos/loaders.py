@@ -13,7 +13,7 @@ import inifix
 import numpy as np
 
 import nonos._readers as readers
-from nonos._types import BinReader, F, IniReader, PlanetReader
+from nonos._types import BinReader, F, IniReader, ParticlesReader, PlanetReader
 
 if sys.version_info >= (3, 13):
     from warnings import deprecated
@@ -21,7 +21,7 @@ else:
     from typing_extensions import deprecated
 
 if TYPE_CHECKING:
-    from nonos._types import BinData, IniData, PlanetData
+    from nonos._types import BinData, IniData, ParticlesData, PlanetData
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -40,6 +40,7 @@ class Readers(Generic[F]):
 
     binary_reader: type[BinReader[F]]
     planet_reader: type[PlanetReader[F]]
+    particles_reader: type[ParticlesReader[F]] | None = None
     ini_reader: type[IniReader]
     dtype: np.dtype[F]
 
@@ -145,6 +146,7 @@ BUILTIN_RECIPES = {
     "fargo3d": Readers(
         binary_reader=readers.binary.Fargo3DReader,
         planet_reader=readers.planet.Fargo3DReader,
+        particles_reader=readers.particles.Fargo3DReader,
         ini_reader=readers.ini.Fargo3DReader,
         dtype=np.dtype("=f8"),
     ),
@@ -236,6 +238,11 @@ class Loader(Generic[F]):
 
     def load_planet_data(self, file: os.PathLike[str]) -> "PlanetData[F]":
         return self.components.planet_reader.read(file)
+
+    def load_particles_data(
+        self, file: os.PathLike[str], **meta: Any
+    ) -> "ParticlesData[F]":
+        return self.components.particles_reader.read(file, **meta)
 
     def load_ini_file(self) -> "IniData":
         return self.components.ini_reader.read(self.parameter_file)
