@@ -28,7 +28,7 @@ from typing import (
 
 import numpy as np
 from matplotlib.scale import SymmetricalLogTransform
-from matplotlib.ticker import SymmetricalLogLocator
+from matplotlib.ticker import ScalarFormatter, SymmetricalLogLocator
 from numpy import float32 as f32, float64 as f64
 
 from nonos._geometry import AutoIndex, Coordinates
@@ -173,10 +173,19 @@ class Plotable(Generic[D, F]):
                     make_axes_locatable,
                 )
 
+                cbformat = ScalarFormatter()
+                cbformat.set_scientific("%.2e")
+                cbformat.set_powerlimits((-2, 12))  # avoid too long numbers
+                cbformat.set_useMathText(True)
+
                 divider = make_axes_locatable(ax)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
                 cbar = fig.colorbar(
-                    im, cax=cax, orientation="vertical"
+                    im,
+                    cax=cax,
+                    orientation="vertical",
+                    location="right",
+                    format=cbformat,
                 )  # , format='%.0e')
                 cbar.set_label(title)
 
