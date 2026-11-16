@@ -176,10 +176,7 @@ class Plotable(Generic[D, F]):
                 divider = make_axes_locatable(ax)
                 cax = divider.append_axes("right", size="5%", pad=0.05)
                 cbar = fig.colorbar(
-                    im,
-                    cax=cax,
-                    orientation="horizontal",
-                    location="bottom",
+                    im, cax=cax, orientation="vertical"
                 )  # , format='%.0e')
                 cbar.set_label(title)
 
