@@ -134,6 +134,7 @@ BUILTIN_RECIPES = {
     "idefix-vtk": Readers(
         binary_reader=readers.binary.VTKReader,
         planet_reader=readers.planet.IdefixReader,
+        particles_reader=readers.particles.IdefixVTKReader,
         ini_reader=readers.ini.IdefixVTKReader,
         dtype=np.dtype(">f4"),
     ),
