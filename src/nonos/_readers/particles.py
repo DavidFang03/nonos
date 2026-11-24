@@ -89,8 +89,13 @@ class IdefixVTKReader:
         elif line.startswith("FIELD"):
             # Idefix >= 0.8
             nfield = int(line.split()[2])
+            vtk_sizes = {"int": 4, "float": 4, "double": 8}
             for _ in range(nfield):
                 d = fh.readline().decode("utf-8")
+
+                _, ncomp, ntuples, vtype = d.split()
+                fh.seek(int(ncomp) * int(ntuples) * vtk_sizes[vtype], os.SEEK_CUR)
+
                 # if d.startswith("GEOMETRY"):
                 #     geom_flag = np.fromfile(fh, dint, 1)[0]
                 #     geometry_from_data = KNOWN_GEOMETRIES.get(geom_flag)
